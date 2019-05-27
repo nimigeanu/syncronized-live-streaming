@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+
+<html lang="en">
+<head>
+  <title>Syncronized live HLS proof-of-concept</title>
+
+   <script src="prototype.js"></script>
+   <script src="ntp.js"></script>
+   <script language="javascript">
+    NTP.sync();
+   </script>
+   <script src="http://code.jquery.com/jquery-1.11.2.min.js"></script>
+   <script src="hls.js"></script>
+   
+</head>
+
+<body>
+    <video height="280" id="video" muted="true" controls></video>
+    <div id="info"></div>
+    <pre id="HlsStatus" class="center" style="white-space: pre-wrap;"></pre>
+
+
+  <script>
+    var programDateTime = 0;
+
+    $(function() {
+
+        if (Hls.isSupported()) {
+            var idealDelay = 30 * 1000;
+            var maxDrift = 100;
+
+            let searchParams = new URLSearchParams(location.search);
+            let delay = searchParams.get('delay');
+            if (delay)
+                idealDelay = delay * 1000;
+
+            var video = document.getElementById('video')
+                var hls = new Hls({
+                	autoplay:true,
+                	autoStartLoad: true,
+                    //liveSyncDuration: 7,
+                    //capLevelToPlayerSize: true,
+                    //maxStarvationDelay: 2,
+                    //maxLoadingDelay: 2,
+                    //liveMaxLatencyDuration: 11,
+                    debug: true
+                });
+            hls.loadSource("http://127.0.0.1:1935/live123/stream1/playlist.m3u8");
+            hls.attachMedia(video);
+            hls.on(Hls.Events.MANIFEST_PARSED, function() {
+                video.play();
+            });
+
+            
+            hls.on(Hls.Events.FRAG_PARSED, function(event, data) {
+                //console.log("FRAG_PARSED ", data);
+                //console.log("currentTime: " + video.currentTime);
+            });
+
+            hls.on(Hls.Events.LEVEL_UPDATED , function (event, data) {
+                //console.log("MANIFEST_PARSED: ", data)
+                setTimeout(afterManifestParsed, 100, data);
+            });
+
+            setInterval(lineUp, 100);
+            bufferLentghHistory = [];
+
+            function afterManifestParsed(data){
+                //console.log("afterManifestParsed: ", data.details);
+                //console.log("afterManifestParsed: ", data.details.programDateTime.getTime())
+                if (programDateTime == 0){
+                    programDateTime = data.details.programDateTime.getTime();
+                }
+            }
+
+            function lineUp(){
+                //console.log("currentTime: " + video.currentTime);
+
+                var streamTime = new Date(programDateTime + video.currentTime * 1000);
+                
+                var now = new Date(NTP.fixTime(new Date().getTime()));
+                var streamTimestamp = streamTime.getTime();
+                var info = "<br>NTP time: " + now;
+                info += "<br>Stream time: " + streamTime;
+                var delay = now.getTime() - streamTimestamp;
+                info += "<br>delay: " + delay/1000;
+                info += "<br>idealDelay: " + idealDelay/1000;
+                var drift = idealDelay - delay;
+                info += "<br>drift: " + drift/1000;
+                let playbackRate = getPlaybackRate(drift);
+                info += "<br>playbackRate: " + video.playbackRate;
+
+                video.playbackRate = playbackRate;
+
+                let bufferLength = -1;
+                for (var i=0; i<video.buffered.length; i++){
+                    bufferLength = video.buffered.end(i) - video.currentTime;
+                    if (video.buffered.end > video.currentTime){
+                        bufferLength = video.buffered.end - video.currentTime;
+                    }
+                }
+                if (bufferLength > 0){
+                    bufferLentghHistory.push(bufferLength);
+                    if (bufferLentghHistory.length > 20) bufferLentghHistory.shift();
+                    let bufferLengthMin = bufferLentghHistory.reduce((a,b)=>Math.min(a,b));
+                    let bufferLengthMax = bufferLentghHistory.reduce((a,b)=>Math.max(a,b));
+                    let bufferSegments = Math.round(bufferLength * 10);
+                    info += "<br>buffer: " + new Array(bufferSegments + 1).join("|");
+                    info += "<br>minBuffer: " + bufferLengthMin.toString().substring(0, 4) 
+                    info += "<br>maxBuffer: " + bufferLengthMax.toString().substring(0, 4);
+                }
+
+                document.getElementById("info").innerHTML = info;
+            }
+
+        }
+
+        function getPlaybackRate(drift){
+            var playbackRate;
+            if (drift > 10000){
+                playbackRate = 0.1;
+            }
+            else if (drift > 1000){
+                playbackRate = 0.5;
+            }
+            else if (drift > 100){
+                playbackRate = 0.9;
+            }
+            else if (drift >= -100){
+                playbackRate = 1.0;   
+            }
+            else if (drift >= -1000){
+                playbackRate = 1.1;      
+            }
+            else if (drift >= -10000){
+                playbackRate = 2;
+            }
+            else {
+                playbackRate = 10;
+            }
+            return playbackRate;
+        }
+    });
+  </script>
+
+
+
+</body>
+</html>
